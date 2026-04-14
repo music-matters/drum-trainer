@@ -103,6 +103,9 @@ def separate_stems(
     """
     Run demucs on *audio_file* and return paths to each stem.
 
+    If all stems already exist in the output directory, returns cached paths
+    without running Demucs (avoids expensive recomputation).
+
     Args:
         audio_file: Path to the source WAV.
         output_dir: Root directory for output stems.
@@ -113,6 +116,16 @@ def separate_stems(
         Dict mapping stem name → Path, plus a 'no_drums' mixed track.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    stems_dir = output_dir / model / audio_file.stem
+    stems_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fast path: if all stems already exist, return them
+    stem_names_to_check = ("drums", "bass", "vocals", "other", "no_drums")
+    expected_stems = {name: stems_dir / f"{name}.wav" for name in stem_names_to_check}
+
+    if all(p.exists() for p in expected_stems.values()):
+        return expected_stems
 
     _device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"

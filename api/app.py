@@ -17,8 +17,11 @@ import queue
 import threading
 import time
 from pathlib import Path
+import os
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+
+from core.rate_limiter import RateLimiter
 
 _ROOT = Path(__file__).parent.parent
 
@@ -27,6 +30,8 @@ app = Flask(
     template_folder=str(_ROOT / "ui" / "web" / "templates"),
     static_folder=str(_ROOT / "ui" / "web" / "static"),
 )
+
+_rate_limiter = RateLimiter(_ROOT / "data" / "rate_limits.json")
 
 # ---------------------------------------------------------------------------
 # Single-session state (local single-user tool)
@@ -67,6 +72,7 @@ def _run_play(
     model: str,
     monitor_volume: float = 0.0,
     metronome_volume: float = 0.0,
+    client_id: str = "unknown",
 ) -> None:
     global _is_running
     try:
@@ -84,6 +90,14 @@ def _run_play(
         latency_path = _ROOT / "latency.json"
         if latency_path.exists():
             latency_ms = json.loads(latency_path.read_text()).get("latency_ms", 0.0)
+
+        # Check rate limit before attempting download
+        dev_mode = os.environ.get("FLASK_ENV") == "development"
+        allowed, quota_msg = _rate_limiter.check_quota(client_id, dev_mode=dev_mode)
+
+        if not allowed:
+            _broadcast({"type": "error", "message": quota_msg})
+            return
 
         listener = MidiListener()
         ports = listener.list_ports()
@@ -108,6 +122,7 @@ def _run_play(
             _broadcast({"type": "step", "step": "download", "status": "running",
                         "message": "Downloading audio..."})
             wav_path, song_title = download_audio(url, data / "downloads")
+            _rate_limiter.record_download(client_id)  # Record successful download
             _broadcast({"type": "step", "step": "download", "status": "done",
                         "message": song_title})
 
@@ -382,6 +397,11 @@ def api_play():
     if not url:
         return jsonify({"error": "url is required"}), 400
 
+    # Extract client IP for rate limiting (X-Forwarded-For for proxy, remote_addr for direct)
+    client_id = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
+    if "," in client_id:
+        client_id = client_id.split(",")[0].strip()
+
     _is_running = True
     threading.Thread(
         target=_run_play,
@@ -392,6 +412,7 @@ def api_play():
             "model": body.get("model", "htdemucs"),
             "monitor_volume": float(body.get("monitor_volume", 0.0)),
             "metronome_volume": float(body.get("metronome_volume", 0.0)),
+            "client_id": client_id,
         },
         daemon=True,
     ).start()
