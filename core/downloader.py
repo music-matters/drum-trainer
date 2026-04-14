@@ -77,7 +77,7 @@ def download_audio(url: str, output_dir: Path, progress_hook=None) -> tuple[Path
                 if title_file.exists()
                 else vid
             )
-            return cached, title
+            return cached, title, True   # (path, title, was_cached)
 
     # Use a unique temp stem — guarantees no old-file collision.
     tmp_stem = f"_tmp_{uuid.uuid4().hex}"
@@ -98,9 +98,11 @@ def download_audio(url: str, output_dir: Path, progress_hook=None) -> tuple[Path
         ],
         "progress_hooks": hooks,
         "postprocessor_args": ["-ar", "44100"],
-        # Do NOT let FFmpegExtractAudio delete the source container after
-        # conversion — that deletion is what hangs on Windows.
+        # keepvideo=True: do NOT delete the source container after conversion.
+        # overwrites=True: pass -y to FFmpeg so it never prompts for confirmation
+        # (without this FFmpeg hangs waiting for stdin on Windows).
         "keepvideo": True,
+        "overwrites": True,
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -120,6 +122,9 @@ def download_audio(url: str, output_dir: Path, progress_hook=None) -> tuple[Path
     else:
         final_path = output_dir / f"{sanitize_filename(title)}.wav"
 
+    # Windows rename raises FileExistsError if the destination already exists.
+    if final_path.exists():
+        final_path.unlink()
     tmp_wav.rename(final_path)
 
     # Persist title so cache hits can return the real name next time.
@@ -136,7 +141,7 @@ def download_audio(url: str, output_dir: Path, progress_hook=None) -> tuple[Path
         except OSError:
             pass  # locked by AV scanner — the OS will clean it up eventually
 
-    return final_path, title
+    return final_path, title, False   # (path, title, was_cached)
 
 
 def get_video_info(url: str) -> dict:

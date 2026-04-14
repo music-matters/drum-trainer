@@ -121,10 +121,11 @@ def _run_play(
             # Step 1: download
             _broadcast({"type": "step", "step": "download", "status": "running",
                         "message": "Downloading audio..."})
-            wav_path, song_title = download_audio(url, data / "downloads")
-            _rate_limiter.record_download(client_id)  # Record successful download
+            wav_path, song_title, was_cached = download_audio(url, data / "downloads")
+            if not was_cached:
+                _rate_limiter.record_download(client_id)  # Only count real downloads
             _broadcast({"type": "step", "step": "download", "status": "done",
-                        "message": song_title})
+                        "message": f"{song_title}  {'(cached)' if was_cached else ''}".strip()})
 
             # Step 2: separate
             _broadcast({"type": "step", "step": "separate", "status": "running",
