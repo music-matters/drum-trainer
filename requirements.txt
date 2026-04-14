@@ -1,0 +1,10 @@
+flask
+yt-dlp
+demucs
+torchcodec
+librosa
+numpy
+scipy
+sounddevice
+soundfile
+python-rtmidi

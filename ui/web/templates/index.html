@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drum Trainer</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="app-header">
+      <h1>Drum Trainer</h1>
+      <p class="subtitle">Play along to any song — get scored on your timing</p>
+    </header>
+
+    <!-- ── Setup ─────────────────────────────────────────────────── -->
+    <section id="setup-panel" class="panel">
+      <div class="card">
+        <h2>New Session</h2>
+        <form id="play-form" autocomplete="off">
+
+          <div class="field">
+            <label for="url">YouTube URL</label>
+            <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…" required>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="midi-port">MIDI Input</label>
+              <select id="midi-port">
+                <option value="">Loading…</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="audio-device">Audio Output</label>
+              <select id="audio-device">
+                <option value="">System default</option>
+              </select>
+            </div>
+            <div class="field field-narrow">
+              <label for="model">Demucs Model</label>
+              <select id="model">
+                <option value="htdemucs" selected>htdemucs (fast)</option>
+                <option value="htdemucs_ft">htdemucs_ft (better)</option>
+                <option value="mdx_extra">mdx_extra (best)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Drum sound section -->
+          <div class="field-section">
+            <label class="section-label">Drum Sound</label>
+            <div class="sound-options">
+              <label class="sound-opt">
+                <input type="radio" name="sound-mode" value="vst" id="mode-vst" checked>
+                <span>Use my VST</span>
+              </label>
+              <label class="sound-opt">
+                <input type="radio" name="sound-mode" value="monitor" id="mode-monitor">
+                <span>Built-in monitor</span>
+              </label>
+              <label class="sound-opt">
+                <input type="radio" name="sound-mode" value="none" id="mode-none">
+                <span>None</span>
+              </label>
+            </div>
+
+            <!-- VST panel -->
+            <div id="vst-panel" class="sound-panel">
+              <div id="vst-list" class="vst-list">
+                <span class="vst-loading">Scanning for VSTs…</span>
+              </div>
+              <p class="sound-hint">
+                Open your VST and make sure it's receiving MIDI from your kit,
+                then confirm below before starting.
+              </p>
+              <label class="vst-confirm">
+                <input type="checkbox" id="vst-confirmed">
+                My VST is open and receiving MIDI
+              </label>
+            </div>
+
+            <!-- Monitor panel -->
+            <div id="monitor-panel" class="sound-panel hidden">
+              <div class="field-row" style="align-items:center; gap:1rem;">
+                <label style="white-space:nowrap; color:var(--subtext); font-size:0.8rem;">Monitor volume</label>
+                <input type="range" id="monitor-volume" min="0" max="100" value="75" style="flex:1;">
+                <span id="monitor-volume-label" style="min-width:2.5rem; text-align:right; font-size:0.85rem;">75%</span>
+              </div>
+              <p class="sound-hint">Synthesised drum sounds played through your audio output in real time.</p>
+            </div>
+          </div>
+
+          <!-- Metronome -->
+          <div class="field-row metronome-row">
+            <label class="metro-label">Metronome</label>
+            <input type="range" id="metronome-volume" min="0" max="100" value="0">
+            <span id="metronome-volume-label" class="metro-value">Off</span>
+          </div>
+
+          <div class="button-row">
+            <button type="submit" class="btn btn-primary">▶ Play Along</button>
+            <button type="button" id="calibrate-btn" class="btn btn-secondary">⊙ Calibrate Latency</button>
+          </div>
+
+        </form>
+
+        <div id="latency-badge" class="latency-badge hidden"></div>
+      </div>
+    </section>
+
+    <!-- ── Progress ──────────────────────────────────────────────── -->
+    <section id="progress-panel" class="panel hidden">
+      <div class="card">
+        <h2 id="progress-title">Running session…</h2>
+
+        <div class="steps" id="pipeline-steps">
+          <div class="step" id="step-download">
+            <span class="step-icon"></span>
+            <div class="step-body">
+              <span class="step-label">Download audio</span>
+              <span class="step-detail"></span>
+            </div>
+          </div>
+          <div class="step" id="step-separate">
+            <span class="step-icon"></span>
+            <div class="step-body">
+              <span class="step-label">Separate stems</span>
+              <span class="step-detail"></span>
+            </div>
+          </div>
+          <div class="step" id="step-analyze">
+            <span class="step-icon"></span>
+            <div class="step-body">
+              <span class="step-label">Analyse drums</span>
+              <span class="step-detail"></span>
+            </div>
+          </div>
+          <div class="step" id="step-play">
+            <span class="step-icon"></span>
+            <div class="step-body">
+              <span class="step-label">Play along</span>
+              <span class="step-detail"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Count-in beat display (shown during 1-bar click-in) -->
+        <div id="countin-display" class="countin-display hidden">
+          <p id="countin-bpm" class="countin-bpm"></p>
+          <div id="beat-dots" class="beat-dots"></div>
+        </div>
+
+        <!-- Calibration info (shown instead of steps during calibrate) -->
+        <div id="cal-info" class="cal-info hidden"></div>
+      </div>
+    </section>
+
+    <!-- ── Countdown overlay ─────────────────────────────────────── -->
+    <div id="countdown-overlay" class="overlay hidden">
+      <div class="countdown-box">
+        <p class="countdown-label">Get ready!</p>
+        <div id="countdown-number" class="countdown-number">3</div>
+      </div>
+    </div>
+
+    <!-- ── Results ───────────────────────────────────────────────── -->
+    <section id="results-panel" class="panel hidden">
+      <div class="card">
+
+        <div class="results-header">
+          <h2 id="results-song-title">Session Results</h2>
+          <p class="results-explainer">
+            How closely your hits matched the original drummer —
+            timing, count, and which drums you nailed or missed.
+          </p>
+        </div>
+
+        <div class="results-top">
+          <div class="accuracy-ring">
+            <svg viewBox="0 0 120 120">
+              <circle class="ring-bg" cx="60" cy="60" r="50"/>
+              <circle id="ring-fill" class="ring-fill" cx="60" cy="60" r="50"
+                      stroke-dasharray="314" stroke-dashoffset="314"/>
+            </svg>
+            <div class="ring-label">
+              <span id="accuracy-pct">0%</span>
+              <small>accuracy</small>
+            </div>
+          </div>
+
+          <div class="grade-grid">
+            <div class="grade-cell perfect">
+              <span id="g-perfect">0</span>
+              <label>Perfect</label>
+              <small>±30 ms</small>
+            </div>
+            <div class="grade-cell good">
+              <span id="g-good">0</span>
+              <label>Good</label>
+              <small>±75 ms</small>
+            </div>
+            <div class="grade-cell ok">
+              <span id="g-ok">0</span>
+              <label>OK</label>
+              <small>±150 ms</small>
+            </div>
+            <div class="grade-cell miss" title="Hits in the song you didn't play">
+              <span id="g-miss">0</span>
+              <label>Miss</label>
+              <small>didn't play</small>
+            </div>
+            <div class="grade-cell ghost" title="Extra hits you played that weren't in the song">
+              <span id="g-ghost">0</span>
+              <label>Ghost</label>
+              <small>extra hits</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="timing-row">
+          <span class="timing-side">Early</span>
+          <div class="timing-track">
+            <div class="timing-zone perfect-zone"></div>
+            <div class="timing-zone good-zone"></div>
+            <div class="timing-zone ok-zone"></div>
+            <div class="timing-center-line"></div>
+            <div id="timing-needle" class="timing-needle"></div>
+          </div>
+          <span class="timing-side">Late</span>
+          <span id="timing-value" class="timing-value">0 ms avg</span>
+        </div>
+
+        <div id="instruments-section">
+          <h3>By Instrument</h3>
+          <table class="instruments-table">
+            <thead>
+              <tr>
+                <th>Instrument</th>
+                <th>Accuracy</th>
+                <th title="Perfect">P</th>
+                <th title="Good">G</th>
+                <th title="OK">O</th>
+                <th title="Miss">M</th>
+                <th title="Ghost notes">Ghost</th>
+                <th>Avg offset</th>
+              </tr>
+            </thead>
+            <tbody id="instruments-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="result-actions">
+          <button id="play-again-btn" class="btn btn-primary">▶ Play Again</button>
+          <button id="new-song-btn" class="btn btn-secondary">+ New Song</button>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── Error toast ───────────────────────────────────────────── -->
+    <div id="error-toast" class="toast hidden"></div>
+
+  </div><!-- .app -->
+
+  <script>
+    // ── State ──────────────────────────────────────────────────────
+    let currentUrl = '';
+    let eventSource = null;
+
+    // ── Utilities ──────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+
+    function show(id) { $(id).classList.remove('hidden'); }
+    function hide(id) { $(id).classList.add('hidden'); }
+
+    function showError(msg) {
+      const toast = $('error-toast');
+      toast.textContent = msg;
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 6000);
+    }
+
+    // ── Sound mode switching ───────────────────────────────────────
+    document.querySelectorAll('input[name="sound-mode"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        document.getElementById('vst-panel').classList.toggle('hidden', radio.value !== 'vst');
+        document.getElementById('monitor-panel').classList.toggle('hidden', radio.value !== 'monitor');
+      });
+    });
+
+    document.getElementById('monitor-volume').addEventListener('input', e => {
+      document.getElementById('monitor-volume-label').textContent = e.target.value + '%';
+    });
+
+    document.getElementById('metronome-volume').addEventListener('input', e => {
+      const val = parseInt(e.target.value);
+      document.getElementById('metronome-volume-label').textContent = val === 0 ? 'Off' : val + '%';
+    });
+
+    // ── VST detection ──────────────────────────────────────────────
+    async function loadVsts() {
+      try {
+        const res = await fetch('/api/vsts');
+        const { vsts } = await res.json();
+        const list = document.getElementById('vst-list');
+        if (vsts.length === 0) {
+          list.innerHTML = '<span class="vst-none">No supported VSTs detected — choose Built-in monitor or None.</span>';
+          document.getElementById('mode-monitor').checked = true;
+          document.getElementById('vst-panel').classList.add('hidden');
+          document.getElementById('monitor-panel').classList.remove('hidden');
+        } else {
+          list.innerHTML = vsts.map((v, i) => `
+            <label class="vst-item ${i === 0 ? 'selected' : ''}">
+              <input type="radio" name="vst-choice" value="${v.name}" ${i === 0 ? 'checked' : ''}>
+              <span>${v.name}</span>
+            </label>
+          `).join('');
+          list.querySelectorAll('input[name="vst-choice"]').forEach(r => {
+            r.addEventListener('change', () => {
+              list.querySelectorAll('.vst-item').forEach(el => el.classList.remove('selected'));
+              r.closest('.vst-item').classList.add('selected');
+            });
+          });
+        }
+      } catch {
+        document.getElementById('vst-list').innerHTML =
+          '<span class="vst-none">Could not check for VSTs.</span>';
+      }
+    }
+
+    // ── Device loading ─────────────────────────────────────────────
+    async function loadDevices() {
+      try {
+        const res = await fetch('/api/devices');
+        const { audio, midi } = await res.json();
+
+        const midiSel = $('midi-port');
+        midiSel.innerHTML = '';
+        if (midi.length === 0) {
+          midiSel.innerHTML = '<option value="">No MIDI devices found</option>';
+        } else {
+          midi.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.index;
+            opt.textContent = d.name;
+            midiSel.appendChild(opt);
+          });
+        }
+
+        const audioSel = $('audio-device');
+        audioSel.innerHTML = '<option value="">System default</option>';
+        audio.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.index;
+          opt.textContent = `[${d.index}] ${d.name}`;
+          audioSel.appendChild(opt);
+        });
+      } catch {
+        $('midi-port').innerHTML = '<option value="">Could not load — is the server running?</option>';
+      }
+    }
+
+    // ── SSE stream ─────────────────────────────────────────────────
+    function openStream(onEvent) {
+      if (eventSource) eventSource.close();
+      eventSource = new EventSource('/api/stream');
+      eventSource.onmessage = e => {
+        const event = JSON.parse(e.data);
+        if (event.type !== 'ping') onEvent(event);
+      };
+      eventSource.onerror = () => {
+        eventSource.close();
+        eventSource = null;
+      };
+    }
+
+    function closeStream() {
+      if (eventSource) { eventSource.close(); eventSource = null; }
+    }
+
+    // ── Step helpers ───────────────────────────────────────────────
+    function setStep(stepId, status, detail) {
+      const el = $('step-' + stepId);
+      if (!el) return;
+      el.className = 'step ' + status;
+      const icons = { pending: '○', running: '◌', done: '✓', error: '✗' };
+      el.querySelector('.step-icon').textContent = icons[status] || '○';
+      if (detail !== undefined) {
+        el.querySelector('.step-detail').textContent = detail;
+      }
+    }
+
+    function resetSteps() {
+      ['download', 'separate', 'analyze', 'play'].forEach(s => setStep(s, 'pending', ''));
+    }
+
+    // ── Countdown ─────────────────────────────────────────────────
+    function showCountdown(count) {
+      if (count > 0) {
+        show('countdown-overlay');
+        $('countdown-number').textContent = count;
+      } else {
+        $('countdown-number').textContent = 'GO!';
+        setTimeout(() => hide('countdown-overlay'), 700);
+      }
+    }
+
+    // ── Count-in beat display ─────────────────────────────────────
+    function showCountin(bpm, beats) {
+      $('countin-bpm').textContent = `Count-in  ♩ = ${bpm} BPM`;
+      const dotsEl = $('beat-dots');
+      dotsEl.innerHTML = '';
+      for (let i = 1; i <= beats; i++) {
+        const dot = document.createElement('div');
+        dot.className = 'beat-dot' + (i === 1 ? ' accent' : '');
+        dot.id = 'beat-dot-' + i;
+        dotsEl.appendChild(dot);
+      }
+      show('countin-display');
+    }
+
+    function highlightBeat(beat) {
+      document.querySelectorAll('.beat-dot').forEach(d => d.classList.remove('active'));
+      const dot = $('beat-dot-' + beat);
+      if (dot) dot.classList.add('active');
+      if (beat === 4) {
+        setTimeout(() => hide('countin-display'), 500);
+      }
+    }
+
+    // ── Results ────────────────────────────────────────────────────
+    function showResults(report) {
+      hide('progress-panel');
+      show('results-panel');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      // Song title in header
+      const urlVal = $('url').value;
+      try {
+        const videoId = new URL(urlVal).searchParams.get('v');
+        $('results-song-title').textContent = videoId ? `Results — ${urlVal}` : 'Session Results';
+      } catch { $('results-song-title').textContent = 'Session Results'; }
+
+      // Accuracy ring
+      const pct = report.accuracy_pct;
+      $('accuracy-pct').textContent = pct.toFixed(1) + '%';
+      const circumference = 314;
+      const offset = circumference * (1 - pct / 100);
+      $('ring-fill').style.strokeDashoffset = offset;
+      // Colour ring by accuracy
+      const ringColor = pct >= 90 ? '#3fb950' : pct >= 70 ? '#d29922' : pct >= 50 ? '#e06c1a' : '#f85149';
+      $('ring-fill').style.stroke = ringColor;
+
+      // Grade counts
+      $('g-perfect').textContent = report.perfect;
+      $('g-good').textContent    = report.good;
+      $('g-ok').textContent      = report.ok;
+      $('g-miss').textContent    = report.miss;
+      $('g-ghost').textContent   = report.ghost;
+
+      // Timing needle (range: ±150ms → 0%–100% of track)
+      const offset_ms = report.avg_offset_ms;
+      const clamped = Math.max(-150, Math.min(150, offset_ms));
+      const pctPos = ((clamped + 150) / 300) * 100;
+      $('timing-needle').style.left = pctPos + '%';
+      const sign = offset_ms >= 0 ? '+' : '';
+      $('timing-value').textContent = `${sign}${offset_ms.toFixed(1)} ms avg`;
+
+      // Per-instrument table
+      const tbody = $('instruments-tbody');
+      tbody.innerHTML = '';
+      const instruments = Object.values(report.by_instrument)
+        .sort((a, b) => b.total - a.total);
+
+      instruments.forEach(inst => {
+        const tr = document.createElement('tr');
+        const offsetStr = (inst.avg_offset_ms >= 0 ? '+' : '') + inst.avg_offset_ms.toFixed(0) + ' ms';
+        const accClass = inst.accuracy_pct >= 90 ? 'perfect' : inst.accuracy_pct >= 70 ? 'good' :
+                         inst.accuracy_pct >= 50 ? 'ok' : 'miss';
+        tr.innerHTML = `
+          <td>${inst.drum_name}</td>
+          <td>
+            <div class="acc-bar-wrap">
+              <div class="acc-bar ${accClass}" style="width:${inst.accuracy_pct}%"></div>
+              <span>${inst.accuracy_pct.toFixed(0)}%</span>
+            </div>
+          </td>
+          <td class="num perfect">${inst.perfect}</td>
+          <td class="num good">${inst.good}</td>
+          <td class="num ok">${inst.ok}</td>
+          <td class="num miss">${inst.miss}</td>
+          <td class="num ghost">${inst.ghost}</td>
+          <td class="num">${offsetStr}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // ── Calibration result ────────────────────────────────────────
+    function showCalResult(data) {
+      hide('progress-panel');
+      show('setup-panel');
+      const badge = $('latency-badge');
+      badge.textContent =
+        `Latency calibrated: ${data.latency_ms > 0 ? '+' : ''}${data.latency_ms} ms  `
+        + `(${data.hits_recorded}/${data.hits_expected} hits detected)`;
+      badge.classList.remove('hidden');
+    }
+
+    // ── Play session ──────────────────────────────────────────────
+    $('play-form').addEventListener('submit', async e => {
+      e.preventDefault();
+
+      currentUrl = $('url').value.trim();
+      const midiPort    = $('midi-port').value;
+      const audioDevice = $('audio-device').value || null;
+      const model       = $('model').value;
+
+      const soundMode = document.querySelector('input[name="sound-mode"]:checked').value;
+
+      // VST confirmation gate
+      if (soundMode === 'vst' && !$('vst-confirmed').checked) {
+        showError('Please confirm your VST is open and receiving MIDI before starting.');
+        return;
+      }
+
+      const monitorVolume = soundMode === 'monitor'
+        ? parseInt($('monitor-volume').value) / 100
+        : 0.0;
+
+      const metronomeVolume = parseInt($('metronome-volume').value) / 100;
+
+      const res = await fetch('/api/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: currentUrl,
+          midi_port: midiPort,
+          audio_device: audioDevice,
+          model,
+          monitor_volume: monitorVolume,
+          metronome_volume: metronomeVolume,
+        }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json();
+        showError(error);
+        return;
+      }
+
+      hide('setup-panel');
+      hide('results-panel');
+      show('progress-panel');
+      $('progress-title').textContent = 'Running session…';
+      hide('cal-info');
+      show('pipeline-steps');
+      resetSteps();
+
+      openStream(event => {
+        if (event.type === 'step') {
+          setStep(event.step, event.status, event.message);
+        } else if (event.type === 'countdown') {
+          showCountdown(event.count);
+        } else if (event.type === 'countin') {
+          showCountin(event.bpm, event.beats);
+        } else if (event.type === 'beat') {
+          highlightBeat(event.beat);
+        } else if (event.type === 'result') {
+          closeStream();
+          showResults(event.report);
+        } else if (event.type === 'done') {
+          closeStream();
+        } else if (event.type === 'error') {
+          closeStream();
+          hide('progress-panel');
+          show('setup-panel');
+          showError(event.message);
+        }
+      });
+    });
+
+    // ── Calibrate ─────────────────────────────────────────────────
+    $('calibrate-btn').addEventListener('click', async () => {
+      const midiPort    = $('midi-port').value;
+      const audioDevice = $('audio-device').value || null;
+
+      const res = await fetch('/api/calibrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ midi_port: midiPort, audio_device: audioDevice }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json();
+        showError(error);
+        return;
+      }
+
+      hide('setup-panel');
+      show('progress-panel');
+      $('progress-title').textContent = 'Calibrating latency…';
+      hide('pipeline-steps');
+      show('cal-info');
+      $('cal-info').textContent = 'Starting…';
+
+      openStream(event => {
+        if (event.type === 'cal_info') {
+          $('cal-info').textContent = event.message;
+        } else if (event.type === 'cal_result') {
+          closeStream();
+          showCalResult(event);
+        } else if (event.type === 'error') {
+          closeStream();
+          hide('progress-panel');
+          show('setup-panel');
+          showError(event.message);
+        }
+      });
+    });
+
+    // ── Play again / New song ─────────────────────────────────────
+    $('play-again-btn').addEventListener('click', async () => {
+      // Re-submit with the same URL (analysis is cached)
+      $('play-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    });
+
+    $('new-song-btn').addEventListener('click', () => {
+      hide('results-panel');
+      show('setup-panel');
+      $('url').value = '';
+    });
+
+    // ── Init ──────────────────────────────────────────────────────
+    loadDevices();
+    loadVsts();
+  </script>
+</body>
+</html>
