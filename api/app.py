@@ -23,7 +23,8 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 
 from core.rate_limiter import RateLimiter
 
-_ROOT = Path(__file__).parent.parent
+_ROOT         = Path(__file__).parent.parent
+_LIBRARY_PATH = _ROOT / "data" / "library.json"
 
 app = Flask(
     __name__,
@@ -37,9 +38,156 @@ _rate_limiter = RateLimiter(_ROOT / "data" / "rate_limits.json")
 # Single-session state (local single-user tool)
 # ---------------------------------------------------------------------------
 
-_is_running = False
+_is_running    = False
+_stop_requested = False
+_current_player = None          # AudioPlayer instance during active session
 _subscribers: list[queue.Queue] = []
 _subscribers_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Library helpers
+# ---------------------------------------------------------------------------
+
+def _extract_youtube_id(url: str) -> str | None:
+    from urllib.parse import urlparse, parse_qs
+    try:
+        p = urlparse(url)
+        if "youtu.be" in p.netloc:
+            return p.path.lstrip("/").split("?")[0]
+        if "youtube.com" in p.netloc:
+            return parse_qs(p.query).get("v", [None])[0]
+    except Exception:
+        pass
+    return None
+
+
+def _library_load() -> list[dict]:
+    if not _LIBRARY_PATH.exists():
+        return []
+    try:
+        return json.loads(_LIBRARY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _library_save(lib: list[dict]) -> None:
+    _LIBRARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LIBRARY_PATH.write_text(json.dumps(lib, indent=2), encoding="utf-8")
+
+
+def _library_upsert(url: str, title: str) -> None:
+    """Add or update a song entry in the library."""
+    yt_id = _extract_youtube_id(url)
+    if not yt_id:
+        return
+    try:
+        from datetime import datetime, timezone
+        lib = _library_load()
+        entry = next((e for e in lib if e.get("youtube_id") == yt_id), None)
+        if entry:
+            entry["title"] = title
+        else:
+            lib.insert(0, {
+                "youtube_id": yt_id,
+                "url": url,
+                "title": title,
+                "added_at": datetime.now(timezone.utc).isoformat(),
+                "sessions": [],
+            })
+        _library_save(lib)
+    except Exception:
+        pass
+
+
+def _library_record_session(url: str, report: dict) -> None:
+    yt_id = _extract_youtube_id(url)
+    if not yt_id:
+        return
+    try:
+        from datetime import datetime, timezone
+        lib = _library_load()
+        entry = next((e for e in lib if e.get("youtube_id") == yt_id), None)
+        if entry is None:
+            return
+        entry.setdefault("sessions", []).append({
+            "played_at": datetime.now(timezone.utc).isoformat(),
+            "score_pct": round(report.get("accuracy_pct", 0), 1),
+            "report": report,
+        })
+        _library_save(lib)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Drum grouping for per-instrument results
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DRUM_GROUPS: list[tuple[str, set[int]]] = [
+    ("Kick",       {35, 36}),
+    ("Snare",      {38, 39, 40}),
+    ("Hi-hat",     {42, 44, 46}),
+    ("Tom (Low)",  {41, 43, 45}),
+    ("Tom (Mid)",  {47, 48}),
+    ("Tom (High)", {50}),
+    ("Crash",      {49, 52, 55, 57}),
+    ("Ride",       {51, 53, 59}),
+]
+
+_KIT_KEY_LABELS: dict[str, str] = {
+    "kick": "Kick", "snare": "Snare",
+    "hihat_closed": "Hi-hat", "hihat_open": "Hi-hat",
+    "tom_low": "Tom (Low)", "tom_mid": "Tom (Mid)", "tom_high": "Tom (High)",
+    "crash": "Crash", "ride": "Ride",
+}
+
+
+def _get_drum_groups() -> list[tuple[str, set[int]]]:
+    """Load grouping from kit_config.json; fall back to GM defaults."""
+    config_path = _ROOT / "data" / "kit_config.json"
+    if config_path.exists():
+        try:
+            raw = json.loads(config_path.read_text())
+            groups: dict[str, set[int]] = {}
+            for key, notes in raw.items():
+                label = _KIT_KEY_LABELS.get(key, key.replace("_", " ").title())
+                groups.setdefault(label, set()).update(int(n) for n in notes)
+            return list(groups.items())
+        except Exception:
+            pass
+    return _DEFAULT_DRUM_GROUPS
+
+
+def _group_instruments(by_instrument: dict) -> list[dict]:
+    """Merge per-note stats into named drum families, sorted by hit count."""
+    result = []
+    for group_name, notes in _get_drum_groups():
+        members = [s for note, s in by_instrument.items() if note in notes]
+        if not members:
+            continue
+        total    = sum(m.total_reference_hits for m in members)
+        perfect  = sum(m.perfect  for m in members)
+        good     = sum(m.good     for m in members)
+        ok       = sum(m.ok       for m in members)
+        miss     = sum(m.miss     for m in members)
+        ghost    = sum(m.ghost    for m in members)
+        hit_count = perfect + good + ok
+        accuracy_pct = round(100.0 * hit_count / total, 1) if total > 0 else 0.0
+        weighted = sum(m.avg_offset_ms * (m.perfect + m.good + m.ok) for m in members)
+        avg_offset = round(weighted / hit_count, 1) if hit_count else 0.0
+        result.append({
+            "drum_name":    group_name,
+            "total":        total,
+            "perfect":      perfect,
+            "good":         good,
+            "ok":           ok,
+            "miss":         miss,
+            "ghost":        ghost,
+            "accuracy_pct": accuracy_pct,
+            "avg_offset_ms": avg_offset,
+        })
+    return sorted(result, key=lambda x: x["total"], reverse=True)
 
 
 def _broadcast(event: dict) -> None:
@@ -72,9 +220,10 @@ def _run_play(
     model: str,
     monitor_volume: float = 0.0,
     metronome_volume: float = 0.0,
+    backing_volume: float = 1.0,
     client_id: str = "unknown",
 ) -> None:
-    global _is_running
+    global _is_running, _stop_requested, _current_player
     try:
         import numpy as np
         from core.downloader import download_audio
@@ -110,6 +259,8 @@ def _run_play(
         listener.open_port(midi_port)
 
         player = AudioPlayer(device=audio_device)
+        _current_player = player
+        _stop_requested = False
 
         # Set up built-in drum monitor if requested
         monitor = None
@@ -118,12 +269,25 @@ def _run_play(
             listener.set_monitor(monitor)
 
         try:
+            # Silently check MIDI is live — 2 s window, no prompt to user.
+            # We only warn if nothing arrives; songs with late drum entries are fine
+            # because this is purely a "is the port alive?" connection test.
+            listener.start_recording()
+            time.sleep(2.0)
+            warmup = listener.stop_recording()
+            if not warmup:
+                _broadcast({"type": "warning",
+                            "message": "No MIDI hits detected on the selected port — "
+                                       "make sure your kit is powered on and the correct "
+                                       "MIDI Input is selected. Continuing…"})
+
             # Step 1: download
             _broadcast({"type": "step", "step": "download", "status": "running",
                         "message": "Downloading audio..."})
             wav_path, song_title, was_cached = download_audio(url, data / "downloads")
             if not was_cached:
-                _rate_limiter.record_download(client_id)  # Only count real downloads
+                _rate_limiter.record_download(client_id)
+            _library_upsert(url, song_title)
             _broadcast({"type": "step", "step": "download", "status": "done",
                         "message": f"{song_title}  {'(cached)' if was_cached else ''}".strip()})
 
@@ -182,6 +346,9 @@ def _run_play(
                     backing_data + metro * metronome_volume, -1.0, 1.0
                 ).astype(np.float32)
 
+            if backing_volume != 1.0:
+                backing_data = (backing_data * backing_volume).astype(np.float32)
+
             combined = np.concatenate([click_bar, backing_data], axis=0)
 
             # Broadcast count-in so the UI can show the beat counter
@@ -209,17 +376,36 @@ def _run_play(
             # Step 4: playing
             _broadcast({"type": "step", "step": "play", "status": "running",
                         "message": "Playing — you're the drummer!"})
-            player.wait()
+            _broadcast({"type": "playback_started"})
+
+            # Poll until done or stopped
+            while not player._done_event.wait(timeout=0.25):
+                if _stop_requested:
+                    player.stop()
+                    break
             midi_events = listener.stop_recording()
+            raw_hits = listener._raw_hit_count
+
+            if _stop_requested:
+                _broadcast({"type": "stopped"})
+                return
+
+            if raw_hits == 0:
+                _broadcast({"type": "warning",
+                            "message": "No MIDI hits detected — is your kit selected as the MIDI Input?"})
+
             _broadcast({"type": "step", "step": "play", "status": "done",
                         "message": (
                             f"Done — {len(midi_events)} hits from your kit "
+                            f"({raw_hits} total received) "
                             f"vs {len(onsets)} in the song."
                         )})
 
             # Score
             report = score_session(onsets, midi_events, latency_ms=latency_ms)
-            _broadcast({"type": "result", "report": _report_to_dict(report)})
+            report_dict = _report_to_dict(report, song_title)
+            _library_record_session(url, report_dict)
+            _broadcast({"type": "result", "report": report_dict})
 
         finally:
             listener.close()
@@ -227,7 +413,9 @@ def _run_play(
     except Exception as exc:
         _broadcast({"type": "error", "message": str(exc)})
     finally:
-        _is_running = False
+        _is_running    = False
+        _stop_requested = False
+        _current_player = None
         _broadcast({"type": "done"})
 
 
@@ -301,33 +489,20 @@ def _run_calibrate(midi_port: int, audio_device: int | None) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _report_to_dict(report) -> dict:
+def _report_to_dict(report, song_title: str = "") -> dict:
     return {
-        "accuracy_pct": round(report.accuracy_pct, 1),
+        "song_title":           song_title,
+        "accuracy_pct":         round(report.accuracy_pct, 1),
         "total_reference_hits": report.total_reference_hits,
-        "perfect": report.perfect_count,
-        "good": report.good_count,
-        "ok": report.ok_count,
-        "miss": report.miss_count,
-        "ghost": report.ghost_count,
-        "avg_offset_ms": round(report.avg_offset_ms, 1),
-        "avg_abs_offset_ms": round(report.avg_abs_offset_ms, 1),
-        "latency_ms": round(report.latency_compensation_ms, 1),
-        "by_instrument": {
-            str(note): {
-                "drum_name": s.drum_name,
-                "total": s.total_reference_hits,
-                "perfect": s.perfect,
-                "good": s.good,
-                "ok": s.ok,
-                "miss": s.miss,
-                "ghost": s.ghost,
-                "accuracy_pct": round(s.accuracy_pct, 1),
-                "avg_offset_ms": round(s.avg_offset_ms, 1),
-            }
-            for note, s in report.by_instrument.items()
-            if note != -1
-        },
+        "perfect":              report.perfect_count,
+        "good":                 report.good_count,
+        "ok":                   report.ok_count,
+        "miss":                 report.miss_count,
+        "ghost":                report.ghost_count,
+        "avg_offset_ms":        round(report.avg_offset_ms, 1),
+        "avg_abs_offset_ms":    round(report.avg_abs_offset_ms, 1),
+        "latency_ms":           round(report.latency_compensation_ms, 1),
+        "by_instrument":        _group_instruments(report.by_instrument),
     }
 
 
@@ -387,6 +562,53 @@ def api_devices():
     })
 
 
+@app.post("/api/stop")
+def api_stop():
+    global _stop_requested
+    _stop_requested = True
+    if _current_player is not None:
+        _current_player.stop()
+    return jsonify({"status": "stopping"})
+
+
+@app.get("/api/library")
+def api_library():
+    lib = _library_load()
+    # Enrich each entry with thumbnail URL and best/play-count summaries.
+    result = []
+    for entry in lib:
+        yt_id    = entry.get("youtube_id", "")
+        sessions = entry.get("sessions", [])
+        scores   = [s["score_pct"] for s in sessions if "score_pct" in s]
+        result.append({
+            "youtube_id": yt_id,
+            "url":        entry.get("url", f"https://www.youtube.com/watch?v={yt_id}"),
+            "title":      entry.get("title", "Unknown"),
+            "thumbnail":  f"https://img.youtube.com/vi/{yt_id}/mqdefault.jpg",
+            "play_count": len(sessions),
+            "best_score": max(scores) if scores else None,
+            "last_played": sessions[-1]["played_at"] if sessions else None,
+        })
+    return jsonify(result)
+
+
+@app.get("/api/library/<youtube_id>/sessions")
+def api_library_sessions(youtube_id: str):
+    lib = _library_load()
+    entry = next((e for e in lib if e.get("youtube_id") == youtube_id), None)
+    if entry is None:
+        return jsonify([])
+    return jsonify(list(reversed(entry.get("sessions", []))))  # newest first
+
+
+@app.delete("/api/library/<youtube_id>")
+def api_library_delete(youtube_id: str):
+    lib = _library_load()
+    lib = [e for e in lib if e.get("youtube_id") != youtube_id]
+    _library_save(lib)
+    return jsonify({"status": "ok"})
+
+
 @app.post("/api/play")
 def api_play():
     global _is_running
@@ -409,10 +631,11 @@ def api_play():
         kwargs={
             "url": url,
             "midi_port": int(body.get("midi_port", 0)),
-            "audio_device": body.get("audio_device") or None,
+            "audio_device": int(body["audio_device"]) if body.get("audio_device") not in (None, "", "null") else None,
             "model": body.get("model", "htdemucs"),
             "monitor_volume": float(body.get("monitor_volume", 0.0)),
             "metronome_volume": float(body.get("metronome_volume", 0.0)),
+            "backing_volume": float(body.get("backing_volume", 1.0)),
             "client_id": client_id,
         },
         daemon=True,
@@ -432,7 +655,7 @@ def api_calibrate():
         target=_run_calibrate,
         kwargs={
             "midi_port": int(body.get("midi_port", 0)),
-            "audio_device": body.get("audio_device") or None,
+            "audio_device": int(body["audio_device"]) if body.get("audio_device") not in (None, "", "null") else None,
         },
         daemon=True,
     ).start()
@@ -475,9 +698,48 @@ def api_stream():
 
 
 # ---------------------------------------------------------------------------
+# New-user session flag  (set by --new-user CLI flag)
+# ---------------------------------------------------------------------------
+
+_new_user_session = False   # consumed on first page load
+
+
+@app.get("/api/new-user-session")
+def api_new_user_session():
+    """
+    Returns {reset: true} once if the server was started with --new-user,
+    then clears the flag so subsequent reloads behave normally.
+    """
+    global _new_user_session
+    fired = _new_user_session
+    _new_user_session = False
+    return jsonify({"reset": fired})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Drum Trainer web server")
+    parser.add_argument(
+        "--new-user",
+        action="store_true",
+        help="Start as a first-time user: stashes library.json and triggers the setup wizard",
+    )
+    args = parser.parse_args()
+
+    if args.new_user:
+        _new_user_session = True
+        # Stash existing library so it isn't lost
+        if _LIBRARY_PATH.exists():
+            from datetime import datetime
+            stamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = _LIBRARY_PATH.with_name(f"library_backup_{stamp}.json")
+            _LIBRARY_PATH.rename(backup)
+            print(f"  Library stashed → {backup.name}")
+        print("  New-user mode: wizard will run on first page load")
+
     print("Starting drum-trainer at http://127.0.0.1:5000")
     app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
