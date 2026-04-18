@@ -29,10 +29,19 @@ body {
 }
 
 /* ── Layout ────────────────────────────────────────────────────── */
-.app {
-  max-width: 760px;
+.app-wrapper {
+  display: flex;
+  gap: 1.5rem;
+  max-width: 1140px;
   margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
+  padding: 0 1.5rem;
+  align-items: flex-start;
+}
+
+.app {
+  flex: 1;
+  min-width: 0;
+  padding: 2rem 0 4rem;
 }
 
 .hidden { display: none !important; }
@@ -564,20 +573,335 @@ td.ghost   { color: var(--ghost); }
   margin-top: 1.5rem;
 }
 
-/* ── Error toast ───────────────────────────────────────────────── */
+/* ── Toasts ────────────────────────────────────────────────────── */
 .toast {
   position: fixed;
   bottom: 1.5rem;
   left: 50%;
   transform: translateX(-50%);
-  background: color-mix(in srgb, var(--miss) 20%, var(--surface));
-  border: 1px solid var(--miss);
   color: var(--text);
   padding: 0.75rem 1.25rem;
   border-radius: 8px;
   font-size: 0.9rem;
-  max-width: 480px;
+  max-width: 520px;
   text-align: center;
   z-index: 200;
   box-shadow: 0 4px 20px rgba(0,0,0,0.4);
 }
+.toast-error {
+  background: color-mix(in srgb, var(--miss) 20%, var(--surface));
+  border: 1px solid var(--miss);
+}
+.toast-warning {
+  bottom: 5rem;
+  background: color-mix(in srgb, #f0a020 15%, var(--surface));
+  border: 1px solid #f0a020;
+}
+
+/* ── Stop button ───────────────────────────────────────────────── */
+.stop-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+.btn-stop {
+  background: color-mix(in srgb, var(--miss) 80%, #000);
+  color: #fff;
+}
+.btn-stop:hover { opacity: 0.85; }
+
+/* ── Performance history ────────────────────────────────────────── */
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.history-song-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex: 1;
+  min-width: 0;
+}
+.history-thumb {
+  width: 80px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+.history-song-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-bottom: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-sessions { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  transition: border-color var(--transition);
+  flex-wrap: wrap;
+}
+.session-row:hover { border-color: var(--accent); }
+
+.session-date {
+  font-size: 0.8rem;
+  color: var(--subtext);
+  white-space: nowrap;
+  min-width: 130px;
+}
+.session-score-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 120px;
+}
+.session-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.session-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.session-bar.perfect { background: var(--perfect); }
+.session-bar.good    { background: var(--good); }
+.session-bar.ok      { background: var(--ok); }
+.session-bar.miss    { background: var(--miss); }
+.session-pct {
+  font-size: 0.9rem;
+  font-weight: 600;
+  min-width: 3rem;
+  text-align: right;
+}
+
+.session-stats {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.stat {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.stat.perfect { color: var(--perfect); }
+.stat.good    { color: var(--good); }
+.stat.ok      { color: var(--ok); }
+.stat.miss    { color: var(--miss); }
+.stat.ghost   { color: var(--ghost); }
+
+/* lib-card clickable body */
+.lib-card-body { cursor: pointer; display: flex; align-items: center; gap: 0.6rem; flex: 1; min-width: 0; }
+
+/* ── App header settings button ────────────────────────────────── */
+.app-header { position: relative; }
+.settings-gear {
+  position: absolute;
+  top: 0; right: 0;
+  background: none;
+  border: none;
+  color: var(--subtext);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  line-height: 1;
+  transition: color var(--transition), background var(--transition);
+}
+.settings-gear:hover { color: var(--text); background: var(--border); }
+
+/* ── Wizard / Settings card ─────────────────────────────────────── */
+.wizard-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  width: 100%;
+  max-width: 460px;
+  animation: fadeUp 0.2s ease;
+}
+@keyframes fadeUp {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.wiz-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+}
+.wiz-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background var(--transition);
+}
+.wiz-dot.active { background: var(--accent); }
+
+.wiz-icon { font-size: 3rem; text-align: center; margin-bottom: 0.75rem; }
+
+.wiz-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-bottom: 0.4rem;
+}
+
+.wiz-body { color: var(--subtext); line-height: 1.6; }
+
+.wiz-hint {
+  font-size: 0.8rem;
+  color: var(--subtext);
+  margin-top: 0.75rem;
+  line-height: 1.5;
+}
+
+.wiz-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2rem;
+  gap: 0.75rem;
+}
+.wiz-nav .btn { min-width: 100px; }
+.wiz-nav .btn-primary { margin-left: auto; }
+
+.settings-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--subtext);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color var(--transition);
+}
+.icon-btn:hover { color: var(--text); }
+
+.wiz-summary {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--subtext);
+  line-height: 1.9;
+}
+.wiz-summary strong { color: var(--text); }
+
+/* ── Library sidebar ───────────────────────────────────────────── */
+.library-panel {
+  width: 260px;
+  flex-shrink: 0;
+  padding-top: 2rem;
+  position: sticky;
+  top: 1rem;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.lib-heading {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subtext);
+  margin-bottom: 0.75rem;
+}
+
+.lib-empty {
+  font-size: 0.85rem;
+  color: var(--subtext);
+}
+
+.lib-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  margin-bottom: 0.6rem;
+  cursor: default;
+  transition: border-color var(--transition);
+}
+.lib-card:hover { border-color: var(--accent); }
+
+.lib-thumb {
+  width: 56px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.lib-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.lib-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-stats {
+  font-size: 0.72rem;
+  color: var(--subtext);
+  margin-top: 2px;
+}
+
+.lib-play-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background var(--transition);
+}
+.lib-play-btn:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }

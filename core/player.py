@@ -209,20 +209,30 @@ class AudioPlayer:
     # Device helpers
     # ------------------------------------------------------------------
 
+    # APIs that are unsuitable for backing-track playback:
+    # ASIO is exclusive — the VST owns it.
+    # MME / DirectSound have 50–200 ms inherent latency.
+    _EXCLUDED_APIS = {"ASIO", "MME", "Windows DirectSound", "Windows WDM-KS"}
+
     @staticmethod
     def list_devices() -> list[dict]:
+        apis = {i: api["name"] for i, api in enumerate(sd.query_hostapis())}
         devs = []
         for i, d in enumerate(sd.query_devices()):
-            if d["max_output_channels"] > 0:
-                devs.append(
-                    {
-                        "index": i,
-                        "name": d["name"],
-                        "channels": d["max_output_channels"],
-                        "default_sr": int(d["default_samplerate"]),
-                        "hostapi": sd.query_hostapis(d["hostapi"])["name"],
-                    }
-                )
+            if d["max_output_channels"] == 0:
+                continue
+            hostapi = apis.get(d["hostapi"], "Unknown")
+            if hostapi in AudioPlayer._EXCLUDED_APIS:
+                continue
+            devs.append(
+                {
+                    "index": i,
+                    "name": d["name"],
+                    "channels": d["max_output_channels"],
+                    "default_sr": int(d["default_samplerate"]),
+                    "hostapi": hostapi,
+                }
+            )
         return devs
 
     # ------------------------------------------------------------------
@@ -254,6 +264,27 @@ class AudioPlayer:
                 data = data[:, np.newaxis]
         else:
             data, samplerate = sf.read(str(audio), dtype="float32", always_2d=True)
+
+        # Resample to match the device's native rate if they differ.
+        # WASAPI shared mode requires the stream rate to match the device
+        # configuration (set in Focusrite Control / Windows sound settings).
+        try:
+            all_devs = list(sd.query_devices())
+            if self.device is not None and 0 <= int(self.device) < len(all_devs):
+                device_sr = int(all_devs[int(self.device)]["default_samplerate"])
+            else:
+                default = sd.default.device
+                out_idx = default[1] if isinstance(default, (list, tuple)) else default
+                device_sr = int(all_devs[out_idx]["default_samplerate"]) if out_idx is not None else samplerate
+            if device_sr != samplerate:
+                from math import gcd
+                from scipy.signal import resample_poly
+                g = gcd(int(device_sr), int(samplerate))
+                data = resample_poly(data, device_sr // g, samplerate // g).astype(np.float32)
+                samplerate = device_sr
+        except Exception:
+            pass  # fall through and let OutputStream raise a clear error
+
         n_frames, n_ch = data.shape
 
         if monitor is not None:

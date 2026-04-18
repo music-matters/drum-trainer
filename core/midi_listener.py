@@ -9,9 +9,14 @@ moment audio playback begins, so all timestamps are in the same time space
 as the reference onsets from the analyzer.
 
 General MIDI drum note map is included for display / per-instrument scoring.
+
+Windows note: rtmidi callbacks are unreliable on Windows (events dropped at
+high trigger rates). We use a polling thread instead — get_message() at 1 ms
+intervals captures every hit with correct timestamps.
 """
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -66,6 +71,9 @@ class MidiListener:
     """
     Wraps an rtmidi input port and records note-on events.
 
+    Uses a polling thread (not rtmidi callbacks) for reliable event capture
+    on Windows, where the callback mechanism drops events at high trigger rates.
+
     Usage:
         listener = MidiListener()
         listener.open_port(0)
@@ -75,13 +83,19 @@ class MidiListener:
         listener.close()
     """
 
+    _POLL_INTERVAL_S = 0.001   # 1 ms polling — captures every hit reliably
+
     def __init__(self) -> None:
         self._midi_in = rtmidi.MidiIn()
         self._events: list[MidiEvent] = []
+        self._lock = threading.Lock()
         self._start_time: float = 0.0
         self._recording: bool = False
         self._port_open: bool = False
         self._monitor = None   # optional DrumMonitor
+        self._poll_thread: threading.Thread | None = None
+        self._stop_poll = threading.Event()
+        self._raw_hit_count: int = 0   # total note-on events seen (for diagnostics)
 
     def set_monitor(self, monitor) -> None:
         """Attach a DrumMonitor so hits are synthesised in real time."""
@@ -105,10 +119,20 @@ class MidiListener:
         self._midi_in.open_port(port_index)
         # Ignore clock and sysex; keep note-on/off
         self._midi_in.ignore_types(sysex=True, timing=True, active_sense=True)
-        self._midi_in.set_callback(self._on_midi_event)
         self._port_open = True
 
+        # Start background polling thread
+        self._stop_poll.clear()
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop, daemon=True, name="midi-poll"
+        )
+        self._poll_thread.start()
+
     def close(self) -> None:
+        if self._poll_thread is not None:
+            self._stop_poll.set()
+            self._poll_thread.join(timeout=0.5)
+            self._poll_thread = None
         if self._port_open:
             self._midi_in.close_port()
             self._port_open = False
@@ -125,23 +149,51 @@ class MidiListener:
             start_time: perf_counter() value representing t=0 of the session.
                         If None, uses current time (i.e. starts now).
         """
-        self._events.clear()
-        self._start_time = start_time if start_time is not None else time.perf_counter()
-        self._recording = True
+        with self._lock:
+            self._events.clear()
+            self._raw_hit_count = 0
+            self._start_time = start_time if start_time is not None else time.perf_counter()
+            self._recording = True
 
     def stop_recording(self) -> list[MidiEvent]:
-        self._recording = False
-        return list(self._events)
+        with self._lock:
+            self._recording = False
+            captured = list(self._events)
+        return captured
 
     # ------------------------------------------------------------------
-    # Internal callback
+    # Polling loop (replaces rtmidi callback for Windows reliability)
     # ------------------------------------------------------------------
 
-    def _on_midi_event(self, event_data, user_data=None) -> None:
-        if not self._recording:
+    def _poll_loop(self) -> None:
+        """Tight poll at 1 ms intervals — never drops events on Windows."""
+        import sys
+        consecutive_errors = 0
+        while not self._stop_poll.is_set():
+            try:
+                msg = self._midi_in.get_message()
+                consecutive_errors = 0
+                if msg is not None:
+                    self._process_message(msg)
+                else:
+                    time.sleep(self._POLL_INTERVAL_S)
+            except Exception as exc:
+                consecutive_errors += 1
+                print(f"[midi-poll] get_message error #{consecutive_errors}: {exc}", file=sys.stderr)
+                if consecutive_errors >= 10:
+                    print("[midi-poll] too many errors — poll thread stopping", file=sys.stderr)
+                    break
+                time.sleep(self._POLL_INTERVAL_S * 10)
+
+    def _process_message(self, msg) -> None:
+        """Parse and dispatch a single rtmidi message tuple."""
+        import sys
+        try:
+            message, _delta = msg
+        except (TypeError, ValueError) as exc:
+            print(f"[midi-poll] bad message format: {exc}", file=sys.stderr)
             return
 
-        message, _delta = event_data
         if len(message) < 3:
             return
 
@@ -152,21 +204,26 @@ class MidiListener:
 
         # Note-on with velocity > 0
         is_note_on = (status & 0xF0) == 0x90 and velocity > 0
-        # Some kits send note-off as note-on with velocity=0; ignore those
         if not is_note_on:
             return
 
-        timestamp = time.perf_counter() - self._start_time
-        self._events.append(
-            MidiEvent(
-                timestamp=timestamp,
-                note=note,
-                velocity=velocity,
-                channel=channel,
-            )
-        )
+        # Timestamp relative to session start
+        ts = time.perf_counter()
 
-        # Fire monitor sound immediately (before scoring overhead)
+        with self._lock:
+            self._raw_hit_count += 1
+            if self._recording:
+                timestamp = ts - self._start_time
+                self._events.append(
+                    MidiEvent(
+                        timestamp=timestamp,
+                        note=note,
+                        velocity=velocity,
+                        channel=channel,
+                    )
+                )
+
+        # Fire monitor sound immediately (outside lock to keep callback fast)
         if self._monitor is not None:
             try:
                 self._monitor.trigger(note, velocity)
