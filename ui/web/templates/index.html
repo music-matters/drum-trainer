@@ -7,11 +7,13 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <div class="app-wrapper">
   <div class="app">
 
     <header class="app-header">
       <h1>Drum Trainer</h1>
       <p class="subtitle">Play along to any song — get scored on your timing</p>
+      <button id="settings-btn" class="settings-gear" title="Settings">⚙</button>
     </header>
 
     <!-- ── Setup ─────────────────────────────────────────────────── -->
@@ -92,6 +94,13 @@
             </div>
           </div>
 
+          <!-- Backing track volume -->
+          <div class="field-row metronome-row">
+            <label class="metro-label">Backing track</label>
+            <input type="range" id="backing-volume" min="0" max="100" value="70">
+            <span id="backing-volume-label" class="metro-value">70%</span>
+          </div>
+
           <!-- Metronome -->
           <div class="field-row metronome-row">
             <label class="metro-label">Metronome</label>
@@ -154,6 +163,11 @@
 
         <!-- Calibration info (shown instead of steps during calibrate) -->
         <div id="cal-info" class="cal-info hidden"></div>
+
+        <!-- Stop button — only shown during active playback -->
+        <div id="stop-row" class="stop-row hidden">
+          <button id="stop-btn" class="btn btn-stop">■ Stop &amp; Return</button>
+        </div>
       </div>
     </section>
 
@@ -259,15 +273,388 @@
       </div>
     </section>
 
-    <!-- ── Error toast ───────────────────────────────────────────── -->
-    <div id="error-toast" class="toast hidden"></div>
+    <!-- ── History ──────────────────────────────────────────────── -->
+    <section id="history-panel" class="panel hidden">
+      <div class="card">
+
+        <div class="history-header">
+          <div class="history-song-info">
+            <img id="history-thumb" class="history-thumb" src="" alt="">
+            <div>
+              <h2 id="history-title" class="history-song-title"></h2>
+              <p id="history-subtitle" class="results-explainer"></p>
+            </div>
+          </div>
+          <button id="history-play-btn" class="btn btn-primary">▶ Play this song</button>
+        </div>
+
+        <div id="history-sessions" class="history-sessions"></div>
+
+        <div style="margin-top:1.25rem">
+          <button id="history-back-btn" class="btn btn-secondary">← Back</button>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── Toasts ────────────────────────────────────────────────── -->
+    <div id="error-toast"   class="toast toast-error   hidden"></div>
+    <div id="warning-toast" class="toast toast-warning hidden"></div>
 
   </div><!-- .app -->
+
+  <!-- ── Library sidebar ──────────────────────────────────────────── -->
+  <aside class="library-panel">
+    <h2 class="lib-heading">My Library</h2>
+    <div id="library-list">
+      <p class="lib-empty">No songs yet.</p>
+    </div>
+  </aside>
+
+  </div><!-- .app-wrapper -->
+
+  <!-- ── First-time setup wizard ───────────────────────────────────── -->
+  <div id="wizard-overlay" class="overlay hidden">
+    <div class="wizard-card">
+      <div class="wiz-dots">
+        <span class="wiz-dot active"></span>
+        <span class="wiz-dot"></span>
+        <span class="wiz-dot"></span>
+      </div>
+
+      <!-- Step 1: Welcome -->
+      <div id="wiz-1" class="wiz-step">
+        <div class="wiz-icon">🥁</div>
+        <h2 class="wiz-title">Welcome to Drum Trainer</h2>
+        <p class="wiz-body">Play along to any song and get scored on your timing. Let's connect your kit — takes about a minute.</p>
+      </div>
+
+      <!-- Step 2: Kit -->
+      <div id="wiz-2" class="wiz-step hidden">
+        <h2 class="wiz-title">Connect your drum kit</h2>
+        <div class="field" style="margin-top:1.25rem">
+          <label for="wiz-midi">MIDI Input</label>
+          <select id="wiz-midi"></select>
+        </div>
+        <div class="field" style="margin-top:0.75rem">
+          <label for="wiz-audio">Audio Output (backing track)</label>
+          <select id="wiz-audio"></select>
+        </div>
+        <p class="wiz-hint">No MIDI devices listed? Make sure your kit is powered on and connected via USB, then refresh.</p>
+      </div>
+
+      <!-- Step 3: Drum sound -->
+      <div id="wiz-3" class="wiz-step hidden">
+        <h2 class="wiz-title">Drum sound</h2>
+        <p class="wiz-body">How do you want to hear your drum hits during playback?</p>
+        <div class="sound-options" style="margin-top:1rem">
+          <label class="sound-opt">
+            <input type="radio" name="wiz-sound" value="vst" checked>
+            <span>Use my VST</span>
+          </label>
+          <label class="sound-opt">
+            <input type="radio" name="wiz-sound" value="monitor">
+            <span>Built-in monitor</span>
+          </label>
+          <label class="sound-opt">
+            <input type="radio" name="wiz-sound" value="none">
+            <span>None</span>
+          </label>
+        </div>
+        <div id="wiz-vst-panel" class="sound-panel" style="margin-top:0.75rem">
+          <p class="sound-hint">Open your VST drum plugin and connect it to your kit. You'll confirm it's running before each session.</p>
+        </div>
+        <div id="wiz-monitor-panel" class="sound-panel hidden" style="margin-top:0.75rem">
+          <div class="field-row" style="align-items:center;gap:1rem">
+            <label style="white-space:nowrap;color:var(--subtext);font-size:0.8rem">Volume</label>
+            <input type="range" id="wiz-monitor-vol" min="0" max="100" value="75" style="flex:1">
+            <span id="wiz-monitor-vol-lbl" style="min-width:2.5rem;text-align:right;font-size:0.85rem">75%</span>
+          </div>
+          <p class="sound-hint" style="margin-top:0.5rem">Synthesised drum sounds mixed through your audio output in real time.</p>
+        </div>
+      </div>
+
+      <!-- Step 4: Done -->
+      <div id="wiz-4" class="wiz-step hidden">
+        <div class="wiz-icon">✓</div>
+        <h2 class="wiz-title">You're all set!</h2>
+        <p class="wiz-body">Your setup has been saved.</p>
+        <div id="wiz-summary" class="wiz-summary"></div>
+        <p class="wiz-hint" style="margin-top:0.75rem">Change anything later with the ⚙ button in the corner.</p>
+      </div>
+
+      <div class="wiz-nav">
+        <button id="wiz-back-btn" class="btn btn-secondary hidden">← Back</button>
+        <button id="wiz-next-btn" class="btn btn-primary">Get Started</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Settings modal ────────────────────────────────────────────── -->
+  <div id="settings-overlay" class="overlay hidden">
+    <div class="wizard-card">
+      <div class="settings-hdr">
+        <h2 class="wiz-title">Settings</h2>
+        <button id="settings-close-btn" class="icon-btn" title="Close">✕</button>
+      </div>
+
+      <div class="field" style="margin-top:1.25rem">
+        <label for="cfg-midi">MIDI Input</label>
+        <select id="cfg-midi"></select>
+      </div>
+      <div class="field" style="margin-top:0.75rem">
+        <label for="cfg-audio">Audio Output (backing track)</label>
+        <select id="cfg-audio"></select>
+      </div>
+
+      <div style="margin-top:1.25rem">
+        <span class="section-label">Drum Sound</span>
+        <div class="sound-options" style="margin-top:0.5rem">
+          <label class="sound-opt">
+            <input type="radio" name="cfg-sound" value="vst" checked>
+            <span>Use my VST</span>
+          </label>
+          <label class="sound-opt">
+            <input type="radio" name="cfg-sound" value="monitor">
+            <span>Built-in monitor</span>
+          </label>
+          <label class="sound-opt">
+            <input type="radio" name="cfg-sound" value="none">
+            <span>None</span>
+          </label>
+        </div>
+        <div id="cfg-monitor-panel" class="sound-panel hidden" style="margin-top:0.5rem">
+          <div class="field-row" style="align-items:center;gap:1rem">
+            <label style="white-space:nowrap;color:var(--subtext);font-size:0.8rem">Volume</label>
+            <input type="range" id="cfg-monitor-vol" min="0" max="100" value="75" style="flex:1">
+            <span id="cfg-monitor-vol-lbl" style="min-width:2.5rem;text-align:right;font-size:0.85rem">75%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="wiz-nav">
+        <button id="settings-cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button id="settings-save-btn" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     // ── State ──────────────────────────────────────────────────────
     let currentUrl = '';
     let eventSource = null;
+    let _deviceData = { audio: [], midi: [] };
+
+    // ── Config persistence (localStorage) ──────────────────────────
+    const CONFIG_KEY = 'drumTrainerConfig';
+
+    function loadConfig() {
+      try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || null; }
+      catch { return null; }
+    }
+
+    function saveConfig(patch) {
+      const existing = loadConfig() || {};
+      localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...existing, ...patch, setupDone: true }));
+    }
+
+    function applyConfig() {
+      const cfg = loadConfig();
+      if (!cfg) return;
+
+      // MIDI port — match by saved name
+      if (cfg.midiPortName) {
+        const sel = $('midi-port');
+        for (const opt of sel.options) {
+          if (opt.textContent === cfg.midiPortName) { opt.selected = true; break; }
+        }
+      }
+      // Audio device — match by name, fall back to index
+      const audioSel = $('audio-device');
+      if (cfg.audioDeviceName) {
+        for (const opt of audioSel.options) {
+          if (opt.textContent.includes(cfg.audioDeviceName)) { opt.selected = true; break; }
+        }
+      } else if (cfg.audioDeviceIndex != null) {
+        for (const opt of audioSel.options) {
+          if (parseInt(opt.value) === cfg.audioDeviceIndex) { opt.selected = true; break; }
+        }
+      }
+      // Sound mode
+      if (cfg.soundMode) {
+        const radio = document.querySelector(`input[name="sound-mode"][value="${cfg.soundMode}"]`);
+        if (radio) {
+          radio.checked = true;
+          $('vst-panel').classList.toggle('hidden', cfg.soundMode !== 'vst');
+          $('monitor-panel').classList.toggle('hidden', cfg.soundMode !== 'monitor');
+        }
+      }
+      // Volumes
+      if (cfg.monitorVolume != null) {
+        $('monitor-volume').value = cfg.monitorVolume;
+        $('monitor-volume-label').textContent = cfg.monitorVolume + '%';
+      }
+      if (cfg.backingVolume != null) {
+        $('backing-volume').value = cfg.backingVolume;
+        $('backing-volume-label').textContent = cfg.backingVolume + '%';
+      }
+      if (cfg.metronomeVolume != null) {
+        $('metronome-volume').value = cfg.metronomeVolume;
+        $('metronome-volume-label').textContent = cfg.metronomeVolume === 0 ? 'Off' : cfg.metronomeVolume + '%';
+      }
+    }
+
+    function captureFormConfig() {
+      const midiSel  = $('midi-port');
+      const audioSel = $('audio-device');
+      const soundMode = document.querySelector('input[name="sound-mode"]:checked')?.value || 'vst';
+      const midiOpt  = midiSel.options[midiSel.selectedIndex];
+      const audioOpt = audioSel.options[audioSel.selectedIndex];
+      return {
+        midiPortIndex:    parseInt(midiSel.value) || 0,
+        midiPortName:     midiOpt  ? midiOpt.textContent : '',
+        audioDeviceIndex: audioSel.value ? parseInt(audioSel.value) : null,
+        audioDeviceName:  audioOpt && audioSel.value
+                            ? audioOpt.textContent.replace(/^\[\d+\]\s*/, '') : null,
+        soundMode,
+        monitorVolume:  parseInt($('monitor-volume').value),
+        backingVolume:  parseInt($('backing-volume').value),
+        metronomeVolume: parseInt($('metronome-volume').value),
+      };
+    }
+
+    function fillDeviceSelects(midiEl, audioEl, cfg) {
+      // MIDI
+      midiEl.innerHTML = '';
+      if (_deviceData.midi.length === 0) {
+        midiEl.innerHTML = '<option value="">No MIDI devices found</option>';
+      } else {
+        _deviceData.midi.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.index; opt.textContent = d.name;
+          midiEl.appendChild(opt);
+        });
+      }
+      // Audio
+      audioEl.innerHTML = '<option value="">System default</option>';
+      _deviceData.audio.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.index; opt.textContent = `[${d.index}] ${d.name}`;
+        audioEl.appendChild(opt);
+      });
+      // Apply saved selections
+      if (!cfg) return;
+      if (cfg.midiPortName) {
+        for (const opt of midiEl.options)
+          if (opt.textContent === cfg.midiPortName) { opt.selected = true; break; }
+      }
+      if (cfg.audioDeviceName) {
+        for (const opt of audioEl.options)
+          if (opt.textContent.includes(cfg.audioDeviceName)) { opt.selected = true; break; }
+      } else if (cfg.audioDeviceIndex != null) {
+        for (const opt of audioEl.options)
+          if (parseInt(opt.value) === cfg.audioDeviceIndex) { opt.selected = true; break; }
+      }
+    }
+
+    // ── Wizard ─────────────────────────────────────────────────────
+    const WIZ_TOTAL = 4;
+    let wizStep = 1;
+
+    function showWizard() {
+      wizStep = 1;
+      fillDeviceSelects($('wiz-midi'), $('wiz-audio'), loadConfig());
+      const soundMode = loadConfig()?.soundMode || 'vst';
+      const r = document.querySelector(`input[name="wiz-sound"][value="${soundMode}"]`);
+      if (r) { r.checked = true; syncWizSound(soundMode); }
+      updateWizardUI();
+      show('wizard-overlay');
+    }
+
+    function hideWizard() { hide('wizard-overlay'); }
+
+    function syncWizSound(mode) {
+      $('wiz-vst-panel').classList.toggle('hidden', mode !== 'vst');
+      $('wiz-monitor-panel').classList.toggle('hidden', mode !== 'monitor');
+    }
+
+    function updateWizardUI() {
+      for (let i = 1; i <= WIZ_TOTAL; i++)
+        $(`wiz-${i}`).classList.toggle('hidden', i !== wizStep);
+      document.querySelectorAll('.wiz-dot').forEach((d, i) =>
+        d.classList.toggle('active', i + 1 <= wizStep));
+      $('wiz-back-btn').classList.toggle('hidden', wizStep === 1);
+      const next = $('wiz-next-btn');
+      if      (wizStep === 1)         next.textContent = 'Get Started →';
+      else if (wizStep === WIZ_TOTAL) next.textContent = 'Start Playing';
+      else if (wizStep === WIZ_TOTAL - 1) next.textContent = 'Finish →';
+      else                            next.textContent = 'Next →';
+    }
+
+    function wizSave() {
+      const midiEl  = $('wiz-midi');
+      const audioEl = $('wiz-audio');
+      const midiOpt  = midiEl.options[midiEl.selectedIndex];
+      const audioOpt = audioEl.options[audioEl.selectedIndex];
+      const soundMode = document.querySelector('input[name="wiz-sound"]:checked')?.value || 'vst';
+      saveConfig({
+        midiPortIndex:    parseInt(midiEl.value) || 0,
+        midiPortName:     midiOpt  ? midiOpt.textContent : '',
+        audioDeviceIndex: audioEl.value ? parseInt(audioEl.value) : null,
+        audioDeviceName:  audioOpt && audioEl.value
+                            ? audioOpt.textContent.replace(/^\[\d+\]\s*/, '') : null,
+        soundMode,
+        monitorVolume: parseInt($('wiz-monitor-vol').value),
+      });
+      applyConfig();
+      // Populate summary
+      const cfg = loadConfig();
+      const soundLabels = { vst: 'VST', monitor: 'Built-in monitor', none: 'None' };
+      $('wiz-summary').innerHTML =
+        `<strong>MIDI:</strong> ${cfg.midiPortName || 'None'}<br>` +
+        `<strong>Audio:</strong> ${cfg.audioDeviceName || 'System default'}<br>` +
+        `<strong>Sound:</strong> ${soundLabels[cfg.soundMode] || cfg.soundMode}`;
+    }
+
+    // (wizard event listeners wired in Init — after $ is defined)
+
+    // ── Settings modal ─────────────────────────────────────────────
+    function showSettings() {
+      const cfg = loadConfig();
+      fillDeviceSelects($('cfg-midi'), $('cfg-audio'), cfg);
+      const soundMode = cfg?.soundMode || 'vst';
+      const r = document.querySelector(`input[name="cfg-sound"][value="${soundMode}"]`);
+      if (r) r.checked = true;
+      $('cfg-monitor-panel').classList.toggle('hidden', soundMode !== 'monitor');
+      if (cfg?.monitorVolume != null) {
+        $('cfg-monitor-vol').value = cfg.monitorVolume;
+        $('cfg-monitor-vol-lbl').textContent = cfg.monitorVolume + '%';
+      }
+      show('settings-overlay');
+    }
+
+    function hideSettings() { hide('settings-overlay'); }
+
+    function saveSettings() {
+      const midiEl  = $('cfg-midi');
+      const audioEl = $('cfg-audio');
+      const midiOpt  = midiEl.options[midiEl.selectedIndex];
+      const audioOpt = audioEl.options[audioEl.selectedIndex];
+      const soundMode = document.querySelector('input[name="cfg-sound"]:checked')?.value || 'vst';
+      saveConfig({
+        midiPortIndex:    parseInt(midiEl.value) || 0,
+        midiPortName:     midiOpt  ? midiOpt.textContent : '',
+        audioDeviceIndex: audioEl.value ? parseInt(audioEl.value) : null,
+        audioDeviceName:  audioOpt && audioEl.value
+                            ? audioOpt.textContent.replace(/^\[\d+\]\s*/, '') : null,
+        soundMode,
+        monitorVolume: parseInt($('cfg-monitor-vol').value),
+      });
+      applyConfig();
+      hideSettings();
+    }
+
+    // (settings event listeners wired in Init — after $ is defined)
 
     // ── Utilities ──────────────────────────────────────────────────
     const $ = id => document.getElementById(id);
@@ -282,6 +669,13 @@
       setTimeout(() => toast.classList.add('hidden'), 6000);
     }
 
+    function showWarning(msg) {
+      const toast = $('warning-toast');
+      toast.textContent = msg;
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 10000);
+    }
+
     // ── Sound mode switching ───────────────────────────────────────
     document.querySelectorAll('input[name="sound-mode"]').forEach(radio => {
       radio.addEventListener('change', () => {
@@ -292,6 +686,10 @@
 
     document.getElementById('monitor-volume').addEventListener('input', e => {
       document.getElementById('monitor-volume-label').textContent = e.target.value + '%';
+    });
+
+    document.getElementById('backing-volume').addEventListener('input', e => {
+      document.getElementById('backing-volume-label').textContent = e.target.value + '%';
     });
 
     document.getElementById('metronome-volume').addEventListener('input', e => {
@@ -334,7 +732,9 @@
     async function loadDevices() {
       try {
         const res = await fetch('/api/devices');
-        const { audio, midi } = await res.json();
+        const data = await res.json();
+        _deviceData = data;
+        const { audio, midi } = data;
 
         const midiSel = $('midi-port');
         midiSel.innerHTML = '';
@@ -357,6 +757,13 @@
           opt.textContent = `[${d.index}] ${d.name}`;
           audioSel.appendChild(opt);
         });
+
+        // Restore saved config into form
+        applyConfig();
+
+        // First-time: show wizard
+        if (!loadConfig()?.setupDone) showWizard();
+
       } catch {
         $('midi-port').innerHTML = '<option value="">Could not load — is the server running?</option>';
       }
@@ -437,11 +844,9 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
       // Song title in header
-      const urlVal = $('url').value;
-      try {
-        const videoId = new URL(urlVal).searchParams.get('v');
-        $('results-song-title').textContent = videoId ? `Results — ${urlVal}` : 'Session Results';
-      } catch { $('results-song-title').textContent = 'Session Results'; }
+      $('results-song-title').textContent = report.song_title
+        ? `Results — ${report.song_title}`
+        : 'Session Results';
 
       // Accuracy ring
       const pct = report.accuracy_pct;
@@ -468,13 +873,11 @@
       const sign = offset_ms >= 0 ? '+' : '';
       $('timing-value').textContent = `${sign}${offset_ms.toFixed(1)} ms avg`;
 
-      // Per-instrument table
+      // Per-instrument table (by_instrument is already a sorted list)
       const tbody = $('instruments-tbody');
       tbody.innerHTML = '';
-      const instruments = Object.values(report.by_instrument)
-        .sort((a, b) => b.total - a.total);
 
-      instruments.forEach(inst => {
+      report.by_instrument.forEach(inst => {
         const tr = document.createElement('tr');
         const offsetStr = (inst.avg_offset_ms >= 0 ? '+' : '') + inst.avg_offset_ms.toFixed(0) + ' ms';
         const accClass = inst.accuracy_pct >= 90 ? 'perfect' : inst.accuracy_pct >= 70 ? 'good' :
@@ -496,6 +899,82 @@
         `;
         tbody.appendChild(tr);
       });
+    }
+
+    // ── History ───────────────────────────────────────────────────
+    let _historySong = null;   // song object when viewing history
+
+    async function showHistory(song) {
+      _historySong = song;
+      $('history-thumb').src = song.thumbnail;
+      $('history-title').textContent = song.title;
+      const plays = song.play_count === 1 ? '1 session' : `${song.play_count} sessions`;
+      const best  = song.best_score != null ? `  ·  Best ${song.best_score.toFixed(0)}%` : '';
+      $('history-subtitle').textContent = plays + best;
+
+      const container = $('history-sessions');
+      container.innerHTML = '<p class="lib-empty" style="padding:0.5rem 0">Loading…</p>';
+
+      hide('setup-panel');
+      hide('results-panel');
+      hide('progress-panel');
+      show('history-panel');
+
+      try {
+        const res = await fetch(`/api/library/${song.youtube_id}/sessions`);
+        const sessions = await res.json();
+
+        if (!sessions.length) {
+          container.innerHTML = '<p class="lib-empty" style="padding:0.5rem 0">No recorded sessions yet.</p>';
+          return;
+        }
+
+        container.innerHTML = sessions.map((s, i) => {
+          const d    = new Date(s.played_at);
+          const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                     + ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+          const pct  = s.score_pct;
+          const cls  = pct >= 90 ? 'perfect' : pct >= 70 ? 'good' : pct >= 50 ? 'ok' : 'miss';
+          const r    = s.report;
+          const stats = r
+            ? `<div class="session-stats">
+                <span class="stat perfect">${r.perfect} P</span>
+                <span class="stat good">${r.good} G</span>
+                <span class="stat ok">${r.ok} O</span>
+                <span class="stat miss">${r.miss} M</span>
+                <span class="stat ghost">${r.ghost} ghost</span>
+               </div>`
+            : '';
+          const viewBtn = r
+            ? `<button class="btn btn-secondary session-view-btn" data-idx="${i}" style="flex-shrink:0">View</button>`
+            : '';
+          return `
+            <div class="session-row">
+              <span class="session-date">${date}</span>
+              <div class="session-score-wrap">
+                <div class="session-bar-track">
+                  <div class="session-bar ${cls}" style="width:${pct}%"></div>
+                </div>
+                <span class="session-pct ${cls}">${pct.toFixed(0)}%</span>
+              </div>
+              ${stats}
+              ${viewBtn}
+            </div>`;
+        }).join('');
+
+        container.querySelectorAll('.session-view-btn').forEach(btn => {
+          const idx = parseInt(btn.dataset.idx);
+          btn.addEventListener('click', () => {
+            showResults(sessions[idx].report);
+            // Override action buttons for history context
+            $('play-again-btn').textContent = '▶ Play Again';
+            $('new-song-btn').textContent   = '← Sessions';
+          });
+        });
+
+      } catch {
+        container.innerHTML = '<p class="lib-empty" style="padding:0.5rem 0">Could not load sessions.</p>';
+      }
     }
 
     // ── Calibration result ────────────────────────────────────────
@@ -531,6 +1010,7 @@
         : 0.0;
 
       const metronomeVolume = parseInt($('metronome-volume').value) / 100;
+      const backingVolume   = parseInt($('backing-volume').value) / 100;
 
       const res = await fetch('/api/play', {
         method: 'POST',
@@ -542,6 +1022,7 @@
           model,
           monitor_volume: monitorVolume,
           metronome_volume: metronomeVolume,
+          backing_volume: backingVolume,
         }),
       });
       if (!res.ok) {
@@ -549,6 +1030,9 @@
         showError(error);
         return;
       }
+
+      // Persist current form state so next session starts pre-configured
+      saveConfig(captureFormConfig());
 
       hide('setup-panel');
       hide('results-panel');
@@ -561,19 +1045,33 @@
       openStream(event => {
         if (event.type === 'step') {
           setStep(event.step, event.status, event.message);
+        } else if (event.type === 'playback_started') {
+          show('stop-row');
         } else if (event.type === 'countdown') {
           showCountdown(event.count);
         } else if (event.type === 'countin') {
           showCountin(event.bpm, event.beats);
         } else if (event.type === 'beat') {
           highlightBeat(event.beat);
+        } else if (event.type === 'warning') {
+          showWarning(event.message);
+        } else if (event.type === 'stopped') {
+          closeStream();
+          hide('stop-row');
+          hide('progress-panel');
+          show('setup-panel');
+          loadLibrary();
         } else if (event.type === 'result') {
           closeStream();
+          hide('stop-row');
           showResults(event.report);
+          loadLibrary();
         } else if (event.type === 'done') {
           closeStream();
+          hide('stop-row');
         } else if (event.type === 'error') {
           closeStream();
+          hide('stop-row');
           hide('progress-panel');
           show('setup-panel');
           showError(event.message);
@@ -619,21 +1117,135 @@
       });
     });
 
+    // ── Stop button ───────────────────────────────────────────────
+    $('stop-btn').addEventListener('click', async () => {
+      $('stop-btn').disabled = true;
+      await fetch('/api/stop', { method: 'POST' });
+    });
+
     // ── Play again / New song ─────────────────────────────────────
     $('play-again-btn').addEventListener('click', async () => {
-      // Re-submit with the same URL (analysis is cached)
+      hide('results-panel');
+      show('setup-panel');
       $('play-form').dispatchEvent(new Event('submit', { cancelable: true }));
     });
 
     $('new-song-btn').addEventListener('click', () => {
       hide('results-panel');
-      show('setup-panel');
-      $('url').value = '';
+      // If we came from history, go back there; otherwise go to setup
+      if (_historySong && $('new-song-btn').textContent.includes('Sessions')) {
+        $('new-song-btn').textContent = '+ New Song';
+        showHistory(_historySong);
+      } else {
+        show('setup-panel');
+        $('url').value = '';
+      }
     });
 
+    $('history-back-btn').addEventListener('click', () => {
+      hide('history-panel');
+      show('setup-panel');
+      _historySong = null;
+    });
+
+    $('history-play-btn').addEventListener('click', () => {
+      if (!_historySong) return;
+      $('url').value = _historySong.url;
+      hide('history-panel');
+      show('setup-panel');
+      $('play-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    });
+
+    // ── Library ───────────────────────────────────────────────────
+    async function loadLibrary() {
+      try {
+        const res  = await fetch('/api/library');
+        const songs = await res.json();
+        const list  = $('library-list');
+
+        if (!songs.length) {
+          list.innerHTML = '<p class="lib-empty">No songs yet.</p>';
+          return;
+        }
+
+        list.innerHTML = songs.map(s => {
+          const plays = s.play_count === 1 ? '1× played' : `${s.play_count}× played`;
+          const best  = s.best_score != null ? `Best ${s.best_score.toFixed(0)}%` : 'Not played yet';
+          const stats = s.play_count > 0 ? `${best} · ${plays}` : 'Not played yet';
+          return `
+            <div class="lib-card" data-youtube-id="${s.youtube_id}" data-url="${s.url}">
+              <div class="lib-card-body" title="View sessions">
+                <img class="lib-thumb" src="${s.thumbnail}" loading="lazy" alt="">
+                <div class="lib-info">
+                  <p class="lib-title">${s.title}</p>
+                  <p class="lib-stats">${stats}</p>
+                </div>
+              </div>
+              <button class="lib-play-btn" title="Play this song">▶</button>
+            </div>`;
+        }).join('');
+
+        // Card body → history view
+        list.querySelectorAll('.lib-card-body').forEach(body => {
+          body.addEventListener('click', () => {
+            const card = body.closest('.lib-card');
+            const song = songs.find(s => s.youtube_id === card.dataset.youtubeId);
+            if (song) showHistory(song);
+          });
+        });
+
+        // Play button → go straight to player
+        list.querySelectorAll('.lib-play-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const url = btn.closest('.lib-card').dataset.url;
+            $('url').value = url;
+            hide('results-panel');
+            hide('history-panel');
+            show('setup-panel');
+            $('play-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+          });
+        });
+      } catch { /* library is non-critical */ }
+    }
+
     // ── Init ──────────────────────────────────────────────────────
-    loadDevices();
-    loadVsts();
+
+    // Wizard events
+    $('wiz-back-btn').addEventListener('click', () => { if (wizStep > 1) { wizStep--; updateWizardUI(); } });
+    $('wiz-next-btn').addEventListener('click', () => {
+      if (wizStep === WIZ_TOTAL) { hideWizard(); return; }
+      if (wizStep === WIZ_TOTAL - 1) wizSave();
+      wizStep++;
+      updateWizardUI();
+    });
+    document.querySelectorAll('input[name="wiz-sound"]').forEach(r =>
+      r.addEventListener('change', () => syncWizSound(r.value)));
+    $('wiz-monitor-vol').addEventListener('input', e =>
+      $('wiz-monitor-vol-lbl').textContent = e.target.value + '%');
+
+    // Settings events
+    $('settings-btn').addEventListener('click', showSettings);
+    $('settings-close-btn').addEventListener('click', hideSettings);
+    $('settings-cancel-btn').addEventListener('click', hideSettings);
+    $('settings-save-btn').addEventListener('click', saveSettings);
+    document.querySelectorAll('input[name="cfg-sound"]').forEach(r =>
+      r.addEventListener('change', () =>
+        $('cfg-monitor-panel').classList.toggle('hidden', r.value !== 'monitor')));
+    $('cfg-monitor-vol').addEventListener('input', e =>
+      $('cfg-monitor-vol-lbl').textContent = e.target.value + '%');
+
+    // Check for server-side new-user flag before loading anything
+    fetch('/api/new-user-session')
+      .then(r => r.json())
+      .then(({ reset }) => {
+        if (reset) localStorage.removeItem(CONFIG_KEY);
+      })
+      .catch(() => {})
+      .finally(() => {
+        loadDevices();
+        loadVsts();
+        loadLibrary();
+      });
   </script>
 </body>
 </html>
